@@ -1,6 +1,6 @@
 # fz-auth
 
-Auth for apps and agents. Server-side sessions, OIDC discovery, encrypted cookies. Works with any OIDC provider.
+Auth for apps and agents. Server-side sessions, OIDC discovery, encrypted cookies. Any OIDC provider. No vendor lock-in.
 
 ```ts
 import { Hono } from 'hono'
