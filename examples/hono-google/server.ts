@@ -7,13 +7,14 @@ const app = new Hono()
 app.route('/auth', await createBffRoutes({
   issuerUrl: process.env.ISSUER_URL!,         // e.g. https://accounts.google.com
   clientId: process.env.CLIENT_ID!,            // Google OAuth client ID
-  authApiUrl: process.env.AUTH_API_URL!,       // Your API for profile enrichment
   encryptionKey: process.env.SESSION_SECRET!,  // openssl rand -hex 32
 }))
 
 // Protected route — only accessible with a valid session
 app.get('/api/me', requiresAuth({ encryptionKey: process.env.SESSION_SECRET! }), (c) => {
-  return c.json({ message: 'Authenticated!', token: c.get('accessToken') })
+  // Access token is available server-side for calling upstream APIs
+  // Never return it to the browser — that defeats the BFF pattern
+  return c.json({ message: 'Authenticated!' })
 })
 
 // Public route

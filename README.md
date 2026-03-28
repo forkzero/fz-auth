@@ -11,12 +11,11 @@ const app = new Hono()
 app.route('/auth', await createBffRoutes({
   issuerUrl: process.env.ISSUER_URL!,
   clientId: process.env.CLIENT_ID!,
-  authApiUrl: process.env.AUTH_API_URL!,
   encryptionKey: process.env.SESSION_SECRET!,
 }))
 
 app.get('/api/me', requiresAuth({ encryptionKey: process.env.SESSION_SECRET! }), (c) => {
-  return c.json({ token: c.get('accessToken') })
+  return c.json({ message: 'Authenticated!' })
 })
 
 export default app

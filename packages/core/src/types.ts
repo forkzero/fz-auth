@@ -21,8 +21,6 @@ export interface BffRoutesOptions {
   clientId: string
   /** Redirect URI for the callback. If omitted, derived from the first request as {origin}/auth/callback */
   redirectUri?: string
-  /** Auth API base URL for profile enrichment */
-  authApiUrl: string
   /** AES-256 key for encrypting session cookies (32-byte hex or base64 string). Ignored if `crypto` is provided. */
   encryptionKey?: string
   /** Pluggable crypto backend. When omitted, uses built-in AES-256-GCM with encryptionKey. */

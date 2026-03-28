@@ -38,6 +38,12 @@ export function resolveCrypto(options: { crypto?: SessionCrypto; encryptionKey?:
   throw new Error('Either crypto or encryptionKey must be provided')
 }
 
+/** Validate that a redirect URL is relative (starts with /) and not a protocol-relative URL (//) */
+function validateRedirect(url: string): string {
+  if (url.startsWith('/') && !url.startsWith('//')) return url
+  throw new Error(`Unsafe redirect URL: ${url}. Must be a relative path starting with /`)
+}
+
 function generateCodeVerifier(length = 128): string {
   return randomBytes(Math.ceil((length * 3) / 4)).toString('base64url').slice(0, length)
 }
@@ -179,6 +185,7 @@ export async function createBffCore(
     },
 
     async getLogoutUrl(cookieValue, postLogoutRedirect) {
+      validateRedirect(postLogoutRedirect)
       if (!endpoints.endSessionUrl) return null
 
       let idToken: string | undefined

@@ -78,6 +78,7 @@ export function AuthProvider({
           const refreshRes = await fetch(refreshUrl, {
             method: "POST",
             credentials: "same-origin",
+            headers: { "X-Requested-With": "fz-auth" },
           });
           if (refreshRes.ok) {
             const data = (await refreshRes.json()) as { authenticated?: boolean; user?: AuthUser };

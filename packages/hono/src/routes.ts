@@ -69,7 +69,12 @@ export async function createBffRoutes(options: BffRoutesOptions) {
     return c.json({ authenticated: true, expiresAt: session.expiresAt })
   })
 
+  // CSRF protection: require a custom header on state-mutating POST.
+  // Browsers block custom headers on cross-origin requests without preflight.
   app.post('/refresh', async (c) => {
+    if (!c.req.header('x-requested-with')) {
+      return c.json({ error: 'Missing X-Requested-With header' }, 403)
+    }
     const raw = getCookie(c, cookieName)
     if (!raw) return c.json({ error: 'No session' }, 401)
 
