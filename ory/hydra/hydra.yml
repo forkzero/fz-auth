@@ -1,0 +1,57 @@
+version: v26.2.0
+
+dsn: postgres://hydra:hydra@postgres:5432/hydra?sslmode=disable
+
+serve:
+  public:
+    cors:
+      enabled: true
+      allowed_methods:
+        - POST
+        - GET
+        - PUT
+        - PATCH
+        - DELETE
+      allowed_headers:
+        - Authorization
+        - Content-Type
+  admin:
+    host: 0.0.0.0
+    port: 4445
+
+urls:
+  self:
+    issuer: http://localhost:4444
+  consent: http://localhost:3100/consent
+  login: http://localhost:3100/login
+  logout: http://localhost:3100/logout
+  error: http://localhost:3100/error
+  post_logout_redirect: http://localhost:3100/login
+
+oidc:
+  subject_identifiers:
+    supported_types:
+      - public
+  dynamic_client_registration:
+    enabled: false
+
+log:
+  level: info
+  format: json
+  leak_sensitive_values: false
+
+secrets:
+  system:
+    - ${SECRETS_SYSTEM}
+
+strategies:
+  access_token: jwt
+
+ttl:
+  access_token: 1h
+  refresh_token: 168h  # 7 days
+  id_token: 1h
+  auth_code: 10m
+
+oauth2:
+  expose_internal_errors: false

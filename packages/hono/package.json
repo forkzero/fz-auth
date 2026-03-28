@@ -1,0 +1,29 @@
+{
+  "name": "fz-auth",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Auth for apps and agents. Server-side sessions, OIDC discovery, encrypted cookies. 12 lines to start.",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "keywords": ["auth", "hono", "bff", "oidc", "oauth2", "session", "encryption", "agent"],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fz-auth-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "hono": "^4.12.8",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4",
+    "@types/node": "^22.0.0"
+  }
+}

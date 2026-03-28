@@ -1,0 +1,32 @@
+{
+  "name": "fz-auth-aws",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AWS integrations for fz-auth — KMS envelope encryption for session cookies",
+  "license": "Apache-2.0",
+  "exports": {
+    "./kms": "./dist/kms/index.js"
+  },
+  "typesVersions": {
+    "*": { "kms": ["dist/kms/index.d.ts"] }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-kms": "^3.800.0"
+  },
+  "peerDependencies": {
+    "fz-auth-core": ">=0.1.0"
+  },
+  "devDependencies": {
+    "fz-auth-core": "workspace:*",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4",
+    "@types/node": "^22.0.0"
+  }
+}
