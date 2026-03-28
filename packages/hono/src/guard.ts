@@ -13,9 +13,7 @@ export interface RequiresAuthOptions {
 }
 
 /**
- * Lightweight auth guard — returns 401 if no valid session, sets `accessToken` on context.
- * Unlike `bffSessionMiddleware`, does NOT fetch the user profile from the Auth API.
- * Use this for routes that only need the access token, not the full user object.
+ * Auth guard — returns 401 if no valid session, sets `accessToken` on context.
  */
 export function requiresAuth(options: RequiresAuthOptions) {
   const { cookieName = DEFAULT_SESSION_COOKIE } = options

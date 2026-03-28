@@ -73,6 +73,4 @@ export interface BffSessionMiddlewareOptions {
   crypto?: SessionCrypto
   /** Cookie name (default: __Host-fz_session) */
   cookieName?: string
-  /** Auth API base URL for profile enrichment */
-  authApiUrl?: string
 }

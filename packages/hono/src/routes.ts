@@ -66,7 +66,7 @@ export async function createBffRoutes(options: BffRoutesOptions) {
       setCookie(c, cookieName, raw, { ...SECURE_COOKIE_OPTIONS, maxAge: rollingDuration })
     }
 
-    return c.json({ authenticated: true, accessToken: session.accessToken, expiresAt: session.expiresAt })
+    return c.json({ authenticated: true, expiresAt: session.expiresAt })
   })
 
   app.post('/refresh', async (c) => {
