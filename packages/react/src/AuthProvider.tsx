@@ -7,7 +7,17 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import type { AuthUser } from "../types.js";
+/**
+ * The authenticated user profile returned by the BFF `/session` endpoint.
+ * The concrete shape is app-defined (it comes from your own profile API), so this is a
+ * minimal, extensible base — narrow it in your app if you want stricter typing.
+ */
+export interface AuthUser {
+  id: string;
+  email?: string;
+  name?: string;
+  [claim: string]: unknown;
+}
 
 export interface AuthContextValue {
   user: AuthUser | null;
