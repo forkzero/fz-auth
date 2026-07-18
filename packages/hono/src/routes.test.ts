@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { randomBytes } from 'node:crypto'
 import { createBffRoutes } from './routes.js'
-import { encrypt, decrypt, createAesCrypto } from './session.js'
-import type { BffSession, SessionCrypto } from './types.js'
+import { encrypt, decrypt, createAesCrypto } from 'fz-auth-core'
+import type { BffSession, SessionCrypto } from 'fz-auth-core'
 
 const testKey = randomBytes(32).toString('hex')
 
-// Mock fetch for OIDC discovery + token exchange + profile fetches
+// Mock fetch for OIDC discovery + token exchange
 const mockFetch = vi.fn()
 globalThis.fetch = mockFetch
 
@@ -26,7 +26,6 @@ async function makeRoutes() {
     issuerUrl: 'https://oauth.example.com',
     clientId: 'test-app',
     redirectUri: 'https://app.example.com/auth/callback',
-    authApiUrl: 'https://auth.example.com',
     encryptionKey: testKey,
     postLoginRedirect: '/dashboard',
     postLogoutRedirect: '/',
@@ -139,7 +138,7 @@ describe('BFF routes', () => {
       expect(res.status).toBe(401)
     })
 
-    it('returns user profile for valid session', async () => {
+    it('returns authenticated status for a valid session', async () => {
       const app = await makeRoutes()
       const session: BffSession = {
         accessToken: 'valid-token',
@@ -147,23 +146,14 @@ describe('BFF routes', () => {
       }
       const cookie = encrypt(session, testKey)
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          id: 'user-1',
-          email: 'test@example.com',
-          organizations: [],
-        }),
-      })
-
       const res = await app.request('/session', {
         headers: { cookie: `__Host-fz_session=${cookie}` },
       })
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.authenticated).toBe(true)
-      expect(body.user.email).toBe('test@example.com')
+      // The OSS /session returns session status only; profile enrichment is app-side.
+      expect(typeof body.expiresAt).toBe('number')
     })
   })
 
@@ -222,7 +212,6 @@ describe('BFF routes', () => {
         issuerUrl: 'https://oauth.example.com',
         clientId: 'test-app',
         redirectUri: 'https://app.example.com/auth/callback',
-        authApiUrl: 'https://auth.example.com',
         crypto: noopCrypto,
         postLoginRedirect: '/dashboard',
       })
@@ -242,7 +231,6 @@ describe('BFF routes', () => {
         issuerUrl: 'https://oauth.example.com',
         clientId: 'test-app',
         redirectUri: 'https://app.example.com/auth/callback',
-        authApiUrl: 'https://auth.example.com',
       })).rejects.toThrow('Either crypto or encryptionKey must be provided')
     })
   })
