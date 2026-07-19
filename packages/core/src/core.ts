@@ -1,6 +1,7 @@
 import { randomBytes, createHash } from 'node:crypto'
+import { jwtVerify, createRemoteJWKSet, decodeJwt, type JWTPayload } from 'jose'
 import { discoverOidcEndpoints, type OidcEndpoints } from './discovery.js'
-import type { SessionCrypto, BffSession, PkceState, OAuthTokenResponse } from './types.js'
+import type { SessionCrypto, BffSession, PkceState, OAuthTokenResponse, AuthIdentity } from './types.js'
 import { createAesCrypto } from './session.js'
 
 export interface BffCoreOptions {
@@ -61,6 +62,16 @@ function sessionFromTokens(tokens: OAuthTokenResponse): BffSession {
   }
 }
 
+/** Project a minimal, deliberate identity subset from validated id_token claims. */
+function projectIdentity(claims: JWTPayload): AuthIdentity {
+  return {
+    sub: String(claims.sub),
+    email: typeof claims.email === 'string' ? claims.email : undefined,
+    emailVerified: typeof claims.email_verified === 'boolean' ? claims.email_verified : undefined,
+    name: typeof claims.name === 'string' ? claims.name : undefined,
+  }
+}
+
 /**
  * Create the framework-agnostic BFF core. Handles OIDC discovery, PKCE,
  * token exchange, session encryption, and refresh. No HTTP framework dependency.
@@ -71,6 +82,38 @@ export async function createBffCore(
 ): Promise<BffCore> {
   const { clientId, redirectUri: defaultRedirectUri, scopes = ['openid', 'email', 'profile'], audience } = options
   const endpoints = await discoverOidcEndpoints(options.issuerUrl)
+  const jwks = endpoints.jwksUri ? createRemoteJWKSet(new URL(endpoints.jwksUri)) : null
+
+  /**
+   * Verify + project the id_token. When the IdP advertises a JWKS (the norm), the token's
+   * SIGNATURE is verified against it (along with iss/aud/exp). If no jwks_uri is advertised,
+   * fall back to claims validation over the TLS-trusted token (OIDC Core §3.1.3.7).
+   */
+  async function verifyIdToken(
+    idToken: string,
+  ): Promise<{ ok: true; identity: AuthIdentity } | { ok: false; error: string }> {
+    try {
+      let claims: JWTPayload
+      if (jwks) {
+        claims = (await jwtVerify(idToken, jwks, { issuer: options.issuerUrl, audience: clientId })).payload
+      } else {
+        claims = decodeJwt(idToken)
+        const strip = (u: string) => u.replace(/\/+$/, '')
+        if (strip(typeof claims.iss === 'string' ? claims.iss : '') !== strip(options.issuerUrl)) {
+          return { ok: false, error: 'issuer mismatch' }
+        }
+        const aud = Array.isArray(claims.aud) ? claims.aud : claims.aud ? [claims.aud] : []
+        if (!aud.includes(clientId)) return { ok: false, error: 'audience mismatch' }
+        if (typeof claims.exp === 'number' && Date.now() >= claims.exp * 1000) {
+          return { ok: false, error: 'token expired' }
+        }
+      }
+      if (!claims.sub) return { ok: false, error: 'missing sub' }
+      return { ok: true, identity: projectIdentity(claims) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'invalid id_token' }
+    }
+  }
 
   function resolveRedirectUri(override?: string): string {
     const uri = override ?? defaultRedirectUri
@@ -136,6 +179,14 @@ export async function createBffCore(
       const tokens = (await tokenRes.json()) as OAuthTokenResponse
       const session = sessionFromTokens(tokens)
 
+      // If the IdP returned an id_token, validate it and project the verified identity onto
+      // the session. A present-but-invalid id_token fails the login.
+      if (session.idToken) {
+        const verified = await verifyIdToken(session.idToken)
+        if (!verified.ok) return { ok: false, error: `id_token validation failed: ${verified.error}` }
+        session.identity = verified.identity
+      }
+
       return {
         ok: true,
         sessionValue: await crypto.encrypt(session),
@@ -175,6 +226,13 @@ export async function createBffCore(
         refreshToken: tokens.refresh_token ?? session.refreshToken,
         idToken: tokens.id_token ?? session.idToken,
         expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+        identity: session.identity,
+      }
+      // Re-project identity if the refresh returned a fresh, valid id_token; otherwise keep
+      // the prior identity.
+      if (tokens.id_token) {
+        const verified = await verifyIdToken(tokens.id_token)
+        if (verified.ok) newSession.identity = verified.identity
       }
 
       return {

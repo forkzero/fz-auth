@@ -7,7 +7,16 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import type { AuthUser } from "../types.js";
+import type { AuthIdentity } from "fz-auth-core";
+
+/**
+ * The verified identity of the signed-in user, as returned by the BFF `/session` endpoint —
+ * projected from the OIDC id_token (`sub`, email, name). It is the authentication assertion,
+ * not a mutable profile; fetch app-owned profile data separately if you need it.
+ *
+ * `AuthUser` is a backwards-compatible alias for {@link AuthIdentity}.
+ */
+export type AuthUser = AuthIdentity;
 
 export interface AuthContextValue {
   user: AuthUser | null;

@@ -2,6 +2,8 @@ export interface OidcEndpoints {
   authorizationUrl: string
   tokenUrl: string
   endSessionUrl?: string
+  /** JWKS endpoint for verifying id_token signatures (OIDC-required, but treated as optional). */
+  jwksUri?: string
 }
 
 /**
@@ -20,6 +22,7 @@ export async function discoverOidcEndpoints(issuerUrl: string): Promise<OidcEndp
     authorization_endpoint?: string
     token_endpoint?: string
     end_session_endpoint?: string
+    jwks_uri?: string
   }
 
   if (!config.authorization_endpoint || !config.token_endpoint) {
@@ -30,5 +33,6 @@ export async function discoverOidcEndpoints(issuerUrl: string): Promise<OidcEndp
     authorizationUrl: config.authorization_endpoint,
     tokenUrl: config.token_endpoint,
     endSessionUrl: config.end_session_endpoint,
+    jwksUri: config.jwks_uri,
   }
 }

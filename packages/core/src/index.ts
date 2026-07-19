@@ -7,8 +7,33 @@ export type {
   SessionCrypto,
   BffRoutesOptions,
   BffSession,
+  AuthIdentity,
   BffSessionMiddlewareOptions,
   PkceState,
   OAuthTokenResponse,
 } from './types.js'
 export { DEFAULT_SESSION_COOKIE, DEFAULT_PKCE_COOKIE, SECURE_COOKIE_OPTIONS } from './types.js'
+
+// Machine-client token minter (API key -> short-TTL JWT + JWKS)
+export { createLocalSigner, createTokenMinter } from './token-minter.js'
+export type { Signer, TokenMinter, TokenMinterOptions, MintInput } from './token-minter.js'
+
+// Device Authorization Grant (RFC 8628)
+export {
+  DeviceGrantService,
+  InMemoryDeviceGrantStore,
+  normalizeUserCode,
+  opaqueTokenMinter,
+} from './device.js'
+export type {
+  DeviceGrant,
+  DeviceGrantStatus,
+  DeviceGrantStore,
+  DeviceGrantConfig,
+  DeviceAuthResponse,
+  PollResult,
+  GrantActionOutcome,
+  MintedCredential,
+  MintCredential,
+  OpaqueTokenMinterOptions,
+} from './device.js'

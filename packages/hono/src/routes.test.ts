@@ -1,12 +1,28 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { randomBytes } from 'node:crypto'
+import { generateKeyPair, exportJWK, SignJWT } from 'jose'
 import { createBffRoutes } from './routes.js'
-import { encrypt, decrypt, createAesCrypto } from './session.js'
-import type { BffSession, SessionCrypto } from './types.js'
+import { encrypt, decrypt, createAesCrypto } from 'fz-auth-core'
+import type { BffSession, SessionCrypto } from 'fz-auth-core'
 
 const testKey = randomBytes(32).toString('hex')
+const futureExp = () => Math.floor(Date.now() / 1000) + 3600
 
-// Mock fetch for OIDC discovery + token exchange + profile fetches
+let signingKey: Awaited<ReturnType<typeof generateKeyPair>>['privateKey']
+let otherKey: Awaited<ReturnType<typeof generateKeyPair>>['privateKey']
+let publicJwk: Record<string, unknown>
+beforeAll(async () => {
+  const kp = await generateKeyPair('ES256', { extractable: true })
+  signingKey = kp.privateKey
+  publicJwk = { ...(await exportJWK(kp.publicKey)), kid: 'test-1', alg: 'ES256', use: 'sig' }
+  otherKey = (await generateKeyPair('ES256', { extractable: true })).privateKey
+})
+async function signIdToken(claims: Record<string, unknown>, key = signingKey): Promise<string> {
+  return new SignJWT(claims).setProtectedHeader({ alg: 'ES256', kid: 'test-1' }).sign(key)
+}
+const jwksOk = () => ({ ok: true, status: 200, json: async () => ({ keys: [publicJwk] }) })
+
+// Mock fetch for OIDC discovery + token exchange
 const mockFetch = vi.fn()
 globalThis.fetch = mockFetch
 
@@ -16,6 +32,7 @@ const discoveryResponse = {
     authorization_endpoint: 'https://oauth.example.com/oauth2/auth',
     token_endpoint: 'https://oauth.example.com/oauth2/token',
     end_session_endpoint: 'https://oauth.example.com/oauth2/sessions/logout',
+    jwks_uri: 'https://oauth.example.com/jwks',
   }),
 }
 
@@ -26,7 +43,6 @@ async function makeRoutes() {
     issuerUrl: 'https://oauth.example.com',
     clientId: 'test-app',
     redirectUri: 'https://app.example.com/auth/callback',
-    authApiUrl: 'https://auth.example.com',
     encryptionKey: testKey,
     postLoginRedirect: '/dashboard',
     postLogoutRedirect: '/',
@@ -91,16 +107,26 @@ describe('BFF routes', () => {
       const location = loginRes.headers.get('location')!
       const state = new URL(location).searchParams.get('state')!
 
-      // Mock token exchange
+      // Mock token exchange with a signed id_token + JWKS.
+      const signedId = await signIdToken({
+        iss: 'https://oauth.example.com',
+        aud: 'test-app',
+        sub: 'user-123',
+        email: 'user@example.com',
+        email_verified: true,
+        name: 'Test User',
+        exp: futureExp(),
+      })
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           access_token: 'test-access-token',
-          id_token: 'test-id-token',
+          id_token: signedId,
           refresh_token: 'test-refresh-token',
           expires_in: 3600,
         }),
       })
+      mockFetch.mockResolvedValueOnce(jwksOk())
 
       const callbackRes = await app.request(`/callback?code=test-code&state=${state}`, {
         headers: { cookie: `__Host-fz_pkce=${cookieValue}` },
@@ -115,6 +141,63 @@ describe('BFF routes', () => {
       expect(sessionCookie).toBeDefined()
       expect(sessionCookie).toContain('HttpOnly')
       expect(sessionCookie).toContain('Secure')
+
+      // The validated id_token identity is projected onto the session and surfaced by /session.
+      const sessionValue = sessionCookie!.split('=').slice(1).join('=').split(';')[0]
+      const sessionRes = await app.request('/session', {
+        headers: { cookie: `__Host-fz_session=${sessionValue}` },
+      })
+      const sessionBody = await sessionRes.json()
+      expect(sessionBody.user).toMatchObject({
+        sub: 'user-123',
+        email: 'user@example.com',
+        emailVerified: true,
+        name: 'Test User',
+      })
+    })
+
+    it('fails login when the id_token audience does not match', async () => {
+      const app = await makeRoutes()
+      const loginRes = await app.request('/login')
+      const pkceCookie = loginRes.headers.getSetCookie().find((c: string) => c.includes('fz_pkce'))!
+      const cookieValue = pkceCookie.split('=').slice(1).join('=').split(';')[0]
+      const state = new URL(loginRes.headers.get('location')!).searchParams.get('state')!
+
+      const badAud = await signIdToken({ iss: 'https://oauth.example.com', aud: 'someone-else', sub: 'u', exp: futureExp() })
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: 'test-access-token', id_token: badAud, expires_in: 3600 }),
+      })
+      mockFetch.mockResolvedValueOnce(jwksOk())
+
+      const res = await app.request(`/callback?code=test-code&state=${state}`, {
+        headers: { cookie: `__Host-fz_pkce=${cookieValue}` },
+      })
+      expect(res.status).toBe(502)
+    })
+
+    it('fails login when the id_token signature does not verify', async () => {
+      const app = await makeRoutes()
+      const loginRes = await app.request('/login')
+      const pkceCookie = loginRes.headers.getSetCookie().find((c: string) => c.includes('fz_pkce'))!
+      const cookieValue = pkceCookie.split('=').slice(1).join('=').split(';')[0]
+      const state = new URL(loginRes.headers.get('location')!).searchParams.get('state')!
+
+      // Signed with a DIFFERENT key than the JWKS advertises → signature check fails.
+      const forged = await signIdToken(
+        { iss: 'https://oauth.example.com', aud: 'test-app', sub: 'u', exp: futureExp() },
+        otherKey,
+      )
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: 'a', id_token: forged, expires_in: 3600 }),
+      })
+      mockFetch.mockResolvedValueOnce(jwksOk())
+
+      const res = await app.request(`/callback?code=test-code&state=${state}`, {
+        headers: { cookie: `__Host-fz_pkce=${cookieValue}` },
+      })
+      expect(res.status).toBe(502)
     })
   })
 
@@ -139,23 +222,14 @@ describe('BFF routes', () => {
       expect(res.status).toBe(401)
     })
 
-    it('returns user profile for valid session', async () => {
+    it('returns authenticated status for a valid session', async () => {
       const app = await makeRoutes()
       const session: BffSession = {
         accessToken: 'valid-token',
         expiresAt: Date.now() + 3600000,
+        identity: { sub: 'user-123', email: 'user@example.com' },
       }
       const cookie = encrypt(session, testKey)
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          id: 'user-1',
-          email: 'test@example.com',
-          organizations: [],
-        }),
-      })
 
       const res = await app.request('/session', {
         headers: { cookie: `__Host-fz_session=${cookie}` },
@@ -163,7 +237,9 @@ describe('BFF routes', () => {
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.authenticated).toBe(true)
-      expect(body.user.email).toBe('test@example.com')
+      // /session surfaces the verified identity projected from the id_token.
+      expect(body.user).toMatchObject({ sub: 'user-123', email: 'user@example.com' })
+      expect(typeof body.expiresAt).toBe('number')
     })
   })
 
@@ -222,7 +298,6 @@ describe('BFF routes', () => {
         issuerUrl: 'https://oauth.example.com',
         clientId: 'test-app',
         redirectUri: 'https://app.example.com/auth/callback',
-        authApiUrl: 'https://auth.example.com',
         crypto: noopCrypto,
         postLoginRedirect: '/dashboard',
       })
@@ -242,7 +317,6 @@ describe('BFF routes', () => {
         issuerUrl: 'https://oauth.example.com',
         clientId: 'test-app',
         redirectUri: 'https://app.example.com/auth/callback',
-        authApiUrl: 'https://auth.example.com',
       })).rejects.toThrow('Either crypto or encryptionKey must be provided')
     })
   })

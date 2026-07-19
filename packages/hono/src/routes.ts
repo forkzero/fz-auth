@@ -66,7 +66,7 @@ export async function createBffRoutes(options: BffRoutesOptions) {
       setCookie(c, cookieName, raw, { ...SECURE_COOKIE_OPTIONS, maxAge: rollingDuration })
     }
 
-    return c.json({ authenticated: true, expiresAt: session.expiresAt })
+    return c.json({ authenticated: true, user: session.identity ?? null, expiresAt: session.expiresAt })
   })
 
   // CSRF protection: require a custom header on state-mutating POST.
@@ -89,7 +89,7 @@ export async function createBffRoutes(options: BffRoutesOptions) {
       maxAge: rollingDuration ?? cookieMaxAge,
     })
 
-    return c.json({ ok: true })
+    return c.json({ authenticated: true, user: result.session.identity ?? null })
   })
 
   app.get('/logout', async (c) => {
