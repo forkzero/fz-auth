@@ -6,6 +6,13 @@ import { createAesCrypto } from './session.js'
 const testKey = randomBytes(32).toString('hex')
 const crypto = createAesCrypto(testKey)
 
+// Build an unsigned JWT-shaped id_token (the code flow validates claims, not signature).
+function idToken(claims: Record<string, unknown>): string {
+  const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
+  return `${seg({ alg: 'none', typ: 'JWT' })}.${seg(claims)}.sig`
+}
+const futureExp = () => Math.floor(Date.now() / 1000) + 3600
+
 const mockFetch = vi.fn()
 globalThis.fetch = mockFetch
 
@@ -68,7 +75,7 @@ describe('BffCore', () => {
       ok: true,
       json: async () => ({
         access_token: 'test-access',
-        id_token: 'test-id',
+        id_token: idToken({ iss: 'https://idp.example.com', aud: 'test-app', sub: 'user-9', email: 'u@e.com', exp: futureExp() }),
         refresh_token: 'test-refresh',
         expires_in: 3600,
       }),
@@ -78,6 +85,8 @@ describe('BffCore', () => {
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.session.accessToken).toBe('test-access')
+      // The validated id_token is projected onto the session identity.
+      expect(result.session.identity).toMatchObject({ sub: 'user-9', email: 'u@e.com' })
       expect(result.sessionValue).toBeTruthy()
     }
   })
@@ -89,6 +98,25 @@ describe('BffCore', () => {
     const result = await core.handleCallback('auth-code', 'wrong-state', cookieValue)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toBe('OAuth state mismatch')
+  })
+
+  it('handleCallback rejects an id_token with a mismatched issuer', async () => {
+    const core = await makeCore()
+    const { cookieValue, redirectUrl } = await core.startLogin()
+    const state = new URL(redirectUrl).searchParams.get('state')!
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        access_token: 'a',
+        id_token: idToken({ iss: 'https://evil.example.com', aud: 'test-app', sub: 'x', exp: futureExp() }),
+        expires_in: 3600,
+      }),
+    })
+
+    const result = await core.handleCallback('auth-code', state, cookieValue)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('id_token validation failed')
   })
 
   it('getSession decrypts and validates expiry', async () => {

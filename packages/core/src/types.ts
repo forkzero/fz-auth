@@ -41,6 +41,19 @@ export interface BffRoutesOptions {
   rollingDuration?: number
 }
 
+/**
+ * Verified identity claims projected from the OIDC id_token — the authentication assertion
+ * (who signed in), stable for the session. This is deliberately NOT a mutable user profile:
+ * an editable display name / avatar is a separate, app-owned concern the app fetches itself.
+ */
+export interface AuthIdentity {
+  /** OIDC subject — the stable, unique user identifier (id_token `sub`). */
+  sub: string
+  email?: string
+  emailVerified?: boolean
+  name?: string
+}
+
 export interface BffSession {
   /** OAuth2 access token */
   accessToken: string
@@ -50,6 +63,8 @@ export interface BffSession {
   expiresAt: number
   /** ID token (for logout hint) */
   idToken?: string
+  /** Verified identity claims projected from the id_token at callback (see {@link AuthIdentity}). */
+  identity?: AuthIdentity
 }
 
 export interface PkceState {

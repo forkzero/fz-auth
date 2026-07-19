@@ -6,6 +6,21 @@ import type { BffSession, SessionCrypto } from 'fz-auth-core'
 
 const testKey = randomBytes(32).toString('hex')
 
+// Build an unsigned JWT-shaped id_token (the code flow validates claims, not signature).
+function idToken(claims: Record<string, unknown>): string {
+  const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
+  return `${seg({ alg: 'none', typ: 'JWT' })}.${seg(claims)}.sig`
+}
+const validIdToken = idToken({
+  iss: 'https://oauth.example.com',
+  aud: 'test-app',
+  sub: 'user-123',
+  email: 'user@example.com',
+  email_verified: true,
+  name: 'Test User',
+  exp: Math.floor(Date.now() / 1000) + 3600,
+})
+
 // Mock fetch for OIDC discovery + token exchange
 const mockFetch = vi.fn()
 globalThis.fetch = mockFetch
@@ -95,7 +110,7 @@ describe('BFF routes', () => {
         ok: true,
         json: async () => ({
           access_token: 'test-access-token',
-          id_token: 'test-id-token',
+          id_token: validIdToken,
           refresh_token: 'test-refresh-token',
           expires_in: 3600,
         }),
@@ -114,6 +129,46 @@ describe('BFF routes', () => {
       expect(sessionCookie).toBeDefined()
       expect(sessionCookie).toContain('HttpOnly')
       expect(sessionCookie).toContain('Secure')
+
+      // The validated id_token identity is projected onto the session and surfaced by /session.
+      const sessionValue = sessionCookie!.split('=').slice(1).join('=').split(';')[0]
+      const sessionRes = await app.request('/session', {
+        headers: { cookie: `__Host-fz_session=${sessionValue}` },
+      })
+      const sessionBody = await sessionRes.json()
+      expect(sessionBody.user).toMatchObject({
+        sub: 'user-123',
+        email: 'user@example.com',
+        emailVerified: true,
+        name: 'Test User',
+      })
+    })
+
+    it('fails login when the id_token audience does not match', async () => {
+      const app = await makeRoutes()
+      const loginRes = await app.request('/login')
+      const pkceCookie = loginRes.headers.getSetCookie().find((c: string) => c.includes('fz_pkce'))!
+      const cookieValue = pkceCookie.split('=').slice(1).join('=').split(';')[0]
+      const state = new URL(loginRes.headers.get('location')!).searchParams.get('state')!
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: 'test-access-token',
+          id_token: idToken({
+            iss: 'https://oauth.example.com',
+            aud: 'someone-else',
+            sub: 'u',
+            exp: Math.floor(Date.now() / 1000) + 3600,
+          }),
+          expires_in: 3600,
+        }),
+      })
+
+      const res = await app.request(`/callback?code=test-code&state=${state}`, {
+        headers: { cookie: `__Host-fz_pkce=${cookieValue}` },
+      })
+      expect(res.status).toBe(502)
     })
   })
 
@@ -143,6 +198,7 @@ describe('BFF routes', () => {
       const session: BffSession = {
         accessToken: 'valid-token',
         expiresAt: Date.now() + 3600000,
+        identity: { sub: 'user-123', email: 'user@example.com' },
       }
       const cookie = encrypt(session, testKey)
 
@@ -152,7 +208,8 @@ describe('BFF routes', () => {
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.authenticated).toBe(true)
-      // The OSS /session returns session status only; profile enrichment is app-side.
+      // /session surfaces the verified identity projected from the id_token.
+      expect(body.user).toMatchObject({ sub: 'user-123', email: 'user@example.com' })
       expect(typeof body.expiresAt).toBe('number')
     })
   })

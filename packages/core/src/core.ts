@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto'
 import { discoverOidcEndpoints, type OidcEndpoints } from './discovery.js'
-import type { SessionCrypto, BffSession, PkceState, OAuthTokenResponse } from './types.js'
+import type { SessionCrypto, BffSession, PkceState, OAuthTokenResponse, AuthIdentity } from './types.js'
 import { createAesCrypto } from './session.js'
 
 export interface BffCoreOptions {
@@ -58,6 +58,61 @@ function sessionFromTokens(tokens: OAuthTokenResponse): BffSession {
     refreshToken: tokens.refresh_token,
     idToken: tokens.id_token,
     expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+  }
+}
+
+interface IdTokenClaims {
+  sub?: string
+  email?: string
+  email_verified?: boolean
+  name?: string
+  iss?: string
+  aud?: string | string[]
+  exp?: number
+}
+
+/** Decode a JWT payload without verifying its signature (see {@link validateAndProjectIdToken}). */
+function decodeJwtPayload(jwt: string): IdTokenClaims | null {
+  const parts = jwt.split('.')
+  if (parts.length !== 3) return null
+  try {
+    return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as IdTokenClaims
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Validate the id_token's claims (iss, aud, exp) and project a minimal, deliberate identity
+ * subset. The id_token is received directly from the token endpoint over a TLS-protected
+ * channel during the code exchange, so per OIDC Core §3.1.3.7 signature validation is
+ * OPTIONAL here — we validate claims and rely on TLS. (Adding JWKS signature verification is
+ * a deliberate future step; it would introduce a JWKS fetch + a crypto dependency in core.)
+ */
+function validateAndProjectIdToken(
+  idToken: string,
+  issuerUrl: string,
+  clientId: string,
+  nowMs: number,
+): { ok: true; identity: AuthIdentity } | { ok: false; error: string } {
+  const claims = decodeJwtPayload(idToken)
+  if (!claims) return { ok: false, error: 'malformed id_token' }
+  if (!claims.sub) return { ok: false, error: 'id_token missing sub' }
+  const strip = (u?: string) => (u ?? '').replace(/\/+$/, '')
+  if (strip(claims.iss) !== strip(issuerUrl)) return { ok: false, error: 'id_token issuer mismatch' }
+  const aud = Array.isArray(claims.aud) ? claims.aud : claims.aud ? [claims.aud] : []
+  if (!aud.includes(clientId)) return { ok: false, error: 'id_token audience mismatch' }
+  if (typeof claims.exp === 'number' && nowMs >= claims.exp * 1000) {
+    return { ok: false, error: 'id_token expired' }
+  }
+  return {
+    ok: true,
+    identity: {
+      sub: claims.sub,
+      email: claims.email,
+      emailVerified: claims.email_verified,
+      name: claims.name,
+    },
   }
 }
 
@@ -136,6 +191,14 @@ export async function createBffCore(
       const tokens = (await tokenRes.json()) as OAuthTokenResponse
       const session = sessionFromTokens(tokens)
 
+      // If the IdP returned an id_token, validate it and project the verified identity onto
+      // the session. A present-but-invalid id_token fails the login.
+      if (session.idToken) {
+        const projected = validateAndProjectIdToken(session.idToken, options.issuerUrl, clientId, Date.now())
+        if (!projected.ok) return { ok: false, error: `id_token validation failed: ${projected.error}` }
+        session.identity = projected.identity
+      }
+
       return {
         ok: true,
         sessionValue: await crypto.encrypt(session),
@@ -175,6 +238,13 @@ export async function createBffCore(
         refreshToken: tokens.refresh_token ?? session.refreshToken,
         idToken: tokens.id_token ?? session.idToken,
         expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+        identity: session.identity,
+      }
+      // Re-project identity if the refresh returned a fresh, valid id_token; otherwise keep
+      // the prior identity.
+      if (tokens.id_token) {
+        const projected = validateAndProjectIdToken(tokens.id_token, options.issuerUrl, clientId, Date.now())
+        if (projected.ok) newSession.identity = projected.identity
       }
 
       return {

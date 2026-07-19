@@ -7,6 +7,7 @@ export type {
   SessionCrypto,
   BffRoutesOptions,
   BffSession,
+  AuthIdentity,
   BffSessionMiddlewareOptions,
   PkceState,
   OAuthTokenResponse,
