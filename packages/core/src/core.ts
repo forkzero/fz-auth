@@ -1,4 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto'
+import { jwtVerify, createRemoteJWKSet, decodeJwt, type JWTPayload } from 'jose'
 import { discoverOidcEndpoints, type OidcEndpoints } from './discovery.js'
 import type { SessionCrypto, BffSession, PkceState, OAuthTokenResponse, AuthIdentity } from './types.js'
 import { createAesCrypto } from './session.js'
@@ -61,58 +62,13 @@ function sessionFromTokens(tokens: OAuthTokenResponse): BffSession {
   }
 }
 
-interface IdTokenClaims {
-  sub?: string
-  email?: string
-  email_verified?: boolean
-  name?: string
-  iss?: string
-  aud?: string | string[]
-  exp?: number
-}
-
-/** Decode a JWT payload without verifying its signature (see {@link validateAndProjectIdToken}). */
-function decodeJwtPayload(jwt: string): IdTokenClaims | null {
-  const parts = jwt.split('.')
-  if (parts.length !== 3) return null
-  try {
-    return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as IdTokenClaims
-  } catch {
-    return null
-  }
-}
-
-/**
- * Validate the id_token's claims (iss, aud, exp) and project a minimal, deliberate identity
- * subset. The id_token is received directly from the token endpoint over a TLS-protected
- * channel during the code exchange, so per OIDC Core §3.1.3.7 signature validation is
- * OPTIONAL here — we validate claims and rely on TLS. (Adding JWKS signature verification is
- * a deliberate future step; it would introduce a JWKS fetch + a crypto dependency in core.)
- */
-function validateAndProjectIdToken(
-  idToken: string,
-  issuerUrl: string,
-  clientId: string,
-  nowMs: number,
-): { ok: true; identity: AuthIdentity } | { ok: false; error: string } {
-  const claims = decodeJwtPayload(idToken)
-  if (!claims) return { ok: false, error: 'malformed id_token' }
-  if (!claims.sub) return { ok: false, error: 'id_token missing sub' }
-  const strip = (u?: string) => (u ?? '').replace(/\/+$/, '')
-  if (strip(claims.iss) !== strip(issuerUrl)) return { ok: false, error: 'id_token issuer mismatch' }
-  const aud = Array.isArray(claims.aud) ? claims.aud : claims.aud ? [claims.aud] : []
-  if (!aud.includes(clientId)) return { ok: false, error: 'id_token audience mismatch' }
-  if (typeof claims.exp === 'number' && nowMs >= claims.exp * 1000) {
-    return { ok: false, error: 'id_token expired' }
-  }
+/** Project a minimal, deliberate identity subset from validated id_token claims. */
+function projectIdentity(claims: JWTPayload): AuthIdentity {
   return {
-    ok: true,
-    identity: {
-      sub: claims.sub,
-      email: claims.email,
-      emailVerified: claims.email_verified,
-      name: claims.name,
-    },
+    sub: String(claims.sub),
+    email: typeof claims.email === 'string' ? claims.email : undefined,
+    emailVerified: typeof claims.email_verified === 'boolean' ? claims.email_verified : undefined,
+    name: typeof claims.name === 'string' ? claims.name : undefined,
   }
 }
 
@@ -126,6 +82,38 @@ export async function createBffCore(
 ): Promise<BffCore> {
   const { clientId, redirectUri: defaultRedirectUri, scopes = ['openid', 'email', 'profile'], audience } = options
   const endpoints = await discoverOidcEndpoints(options.issuerUrl)
+  const jwks = endpoints.jwksUri ? createRemoteJWKSet(new URL(endpoints.jwksUri)) : null
+
+  /**
+   * Verify + project the id_token. When the IdP advertises a JWKS (the norm), the token's
+   * SIGNATURE is verified against it (along with iss/aud/exp). If no jwks_uri is advertised,
+   * fall back to claims validation over the TLS-trusted token (OIDC Core §3.1.3.7).
+   */
+  async function verifyIdToken(
+    idToken: string,
+  ): Promise<{ ok: true; identity: AuthIdentity } | { ok: false; error: string }> {
+    try {
+      let claims: JWTPayload
+      if (jwks) {
+        claims = (await jwtVerify(idToken, jwks, { issuer: options.issuerUrl, audience: clientId })).payload
+      } else {
+        claims = decodeJwt(idToken)
+        const strip = (u: string) => u.replace(/\/+$/, '')
+        if (strip(typeof claims.iss === 'string' ? claims.iss : '') !== strip(options.issuerUrl)) {
+          return { ok: false, error: 'issuer mismatch' }
+        }
+        const aud = Array.isArray(claims.aud) ? claims.aud : claims.aud ? [claims.aud] : []
+        if (!aud.includes(clientId)) return { ok: false, error: 'audience mismatch' }
+        if (typeof claims.exp === 'number' && Date.now() >= claims.exp * 1000) {
+          return { ok: false, error: 'token expired' }
+        }
+      }
+      if (!claims.sub) return { ok: false, error: 'missing sub' }
+      return { ok: true, identity: projectIdentity(claims) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'invalid id_token' }
+    }
+  }
 
   function resolveRedirectUri(override?: string): string {
     const uri = override ?? defaultRedirectUri
@@ -194,9 +182,9 @@ export async function createBffCore(
       // If the IdP returned an id_token, validate it and project the verified identity onto
       // the session. A present-but-invalid id_token fails the login.
       if (session.idToken) {
-        const projected = validateAndProjectIdToken(session.idToken, options.issuerUrl, clientId, Date.now())
-        if (!projected.ok) return { ok: false, error: `id_token validation failed: ${projected.error}` }
-        session.identity = projected.identity
+        const verified = await verifyIdToken(session.idToken)
+        if (!verified.ok) return { ok: false, error: `id_token validation failed: ${verified.error}` }
+        session.identity = verified.identity
       }
 
       return {
@@ -243,8 +231,8 @@ export async function createBffCore(
       // Re-project identity if the refresh returned a fresh, valid id_token; otherwise keep
       // the prior identity.
       if (tokens.id_token) {
-        const projected = validateAndProjectIdToken(tokens.id_token, options.issuerUrl, clientId, Date.now())
-        if (projected.ok) newSession.identity = projected.identity
+        const verified = await verifyIdToken(tokens.id_token)
+        if (verified.ok) newSession.identity = verified.identity
       }
 
       return {

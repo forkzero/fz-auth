@@ -1,17 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { randomBytes } from 'node:crypto'
+import { generateKeyPair, exportJWK, SignJWT } from 'jose'
 import { createBffCore, resolveCrypto } from './core.js'
 import { createAesCrypto } from './session.js'
 
 const testKey = randomBytes(32).toString('hex')
 const crypto = createAesCrypto(testKey)
-
-// Build an unsigned JWT-shaped id_token (the code flow validates claims, not signature).
-function idToken(claims: Record<string, unknown>): string {
-  const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
-  return `${seg({ alg: 'none', typ: 'JWT' })}.${seg(claims)}.sig`
-}
 const futureExp = () => Math.floor(Date.now() / 1000) + 3600
+
+let signingKey: Awaited<ReturnType<typeof generateKeyPair>>['privateKey']
+let publicJwk: Record<string, unknown>
+beforeAll(async () => {
+  const kp = await generateKeyPair('ES256', { extractable: true })
+  signingKey = kp.privateKey
+  publicJwk = { ...(await exportJWK(kp.publicKey)), kid: 'test-1', alg: 'ES256', use: 'sig' }
+})
+async function signIdToken(claims: Record<string, unknown>): Promise<string> {
+  return new SignJWT(claims).setProtectedHeader({ alg: 'ES256', kid: 'test-1' }).sign(signingKey)
+}
+const jwksOk = () => ({ ok: true, status: 200, json: async () => ({ keys: [publicJwk] }) })
 
 const mockFetch = vi.fn()
 globalThis.fetch = mockFetch
@@ -22,6 +29,7 @@ const discoveryResponse = {
     authorization_endpoint: 'https://idp.example.com/authorize',
     token_endpoint: 'https://idp.example.com/token',
     end_session_endpoint: 'https://idp.example.com/logout',
+    jwks_uri: 'https://idp.example.com/jwks',
   }),
 }
 
@@ -71,15 +79,23 @@ describe('BffCore', () => {
     const { cookieValue, redirectUrl } = await core.startLogin()
     const state = new URL(redirectUrl).searchParams.get('state')!
 
+    const signed = await signIdToken({
+      iss: 'https://idp.example.com',
+      aud: 'test-app',
+      sub: 'user-9',
+      email: 'u@e.com',
+      exp: futureExp(),
+    })
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         access_token: 'test-access',
-        id_token: idToken({ iss: 'https://idp.example.com', aud: 'test-app', sub: 'user-9', email: 'u@e.com', exp: futureExp() }),
+        id_token: signed,
         refresh_token: 'test-refresh',
         expires_in: 3600,
       }),
     })
+    mockFetch.mockResolvedValueOnce(jwksOk())
 
     const result = await core.handleCallback('auth-code', state, cookieValue)
     expect(result.ok).toBe(true)
@@ -105,14 +121,12 @@ describe('BffCore', () => {
     const { cookieValue, redirectUrl } = await core.startLogin()
     const state = new URL(redirectUrl).searchParams.get('state')!
 
+    const badIss = await signIdToken({ iss: 'https://evil.example.com', aud: 'test-app', sub: 'x', exp: futureExp() })
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({
-        access_token: 'a',
-        id_token: idToken({ iss: 'https://evil.example.com', aud: 'test-app', sub: 'x', exp: futureExp() }),
-        expires_in: 3600,
-      }),
+      json: async () => ({ access_token: 'a', id_token: badIss, expires_in: 3600 }),
     })
+    mockFetch.mockResolvedValueOnce(jwksOk())
 
     const result = await core.handleCallback('auth-code', state, cookieValue)
     expect(result.ok).toBe(false)
