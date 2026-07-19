@@ -14,6 +14,10 @@ export type {
 } from './types.js'
 export { DEFAULT_SESSION_COOKIE, DEFAULT_PKCE_COOKIE, SECURE_COOKIE_OPTIONS } from './types.js'
 
+// Machine-client token minter (API key -> short-TTL JWT + JWKS)
+export { createLocalSigner, createTokenMinter } from './token-minter.js'
+export type { Signer, TokenMinter, TokenMinterOptions, MintInput } from './token-minter.js'
+
 // Device Authorization Grant (RFC 8628)
 export {
   DeviceGrantService,
