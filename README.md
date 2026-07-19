@@ -125,6 +125,19 @@ npm install fz-auth-aws
 | [Release pipeline](prompts/ci/release-pipeline.md) | Changesets → auto-publish |
 | [Secret scanning](prompts/ci/secret-scanning.md) | Pre-commit detect-secrets |
 
+## Design notes
+
+The *why* behind the library — vendor-neutral guides for anyone implementing auth
+([docs/](docs/README.md)):
+
+| Guide | What |
+|-------|------|
+| [The BFF pattern](docs/bff.md) | Server-side sessions over upstream OIDC; why tokens never reach the browser |
+| [Device & CLI auth](docs/device-flow.md) | RFC 8628 device grant, delegating identity to the browser |
+| [Machine-to-machine auth](docs/machine-clients.md) | API key → short-TTL JWT + JWKS for local verification |
+| [Enterprise SSO without becoming an IdP](docs/enterprise-sso.md) | Federating to the customer's IdP as the relying party |
+| [Choosing an identity approach](docs/choosing-an-approach.md) | Roll-your-own vs BFF vs hub vs broker vs self-hosted |
+
 ## Self-hosted Ory starter kit
 
 The `ory/` directory contains a production-ready Ory Kratos + Hydra configuration:
