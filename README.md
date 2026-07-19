@@ -1,5 +1,9 @@
 # fz-auth
 
+[![CI](https://github.com/forkzero/fz-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/forkzero/fz-auth/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-brightgreen.svg)](./.github/workflows/ci.yml)
+
 Auth for apps and agents. Server-side sessions, OIDC discovery, encrypted cookies. Any OIDC provider. No vendor lock-in.
 
 ```ts
